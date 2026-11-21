@@ -1,0 +1,7 @@
+﻿node_modules/
+.pnpm-store/
+.testdata/
+.uidata/
+*.log
+build/
+out/

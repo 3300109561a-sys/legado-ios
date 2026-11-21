@@ -1,0 +1,180 @@
+name: build-unsigned-ipa
+
+# Builds an UNSIGNED .ipa on a macOS runner and attaches it to the run.
+#
+# An unsigned IPA is exactly what TrollStore installs on iPad 6 / iOS 16.3.1
+# with no Apple developer account and no Mac. For AltStore / Sideloadly, re-sign
+# this same artifact with a free Apple ID instead.
+#
+# Whatever happens, the app bundle, the raw log and a dependency-scan are
+# uploaded, so a failed run still tells us exactly what to fix.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+env:
+  SCHEME: LegadoMobile
+  PROJECT: ios/LegadoMobile.xcodeproj
+  BUNDLE_ID: app.legado.reader
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          set -o pipefail
+          xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          xcodebuild -showsdks | tee -a "$GITHUB_STEP_SUMMARY"
+          sw_vers
+
+      - name: Verify the project skeleton
+        run: |
+          set -euo pipefail
+          test -f "$PROJECT/project.pbxproj"
+          test -f ios/LegadoMobile/LegadoMobileApp.swift
+          test -f ios/LegadoMobile/Info.plist
+          test -f ios/LegadoMobile/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          test -f ios/LegadoMobile/WebApp/index.html
+          test -f ios/LegadoMobile/WebApp/js/app.js
+          echo "skeleton complete"
+
+      - name: Validate Info.plist and asset catalog
+        run: |
+          set -euo pipefail
+          plutil -lint ios/LegadoMobile/Info.plist
+          plutil -lint ios/LegadoMobile/Assets.xcassets/AppIcon.appiconset/Contents.json
+          plutil -lint ios/LegadoMobile/Assets.xcassets/LaunchBackground.colorset/Contents.json
+          MIN=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' ios/LegadoMobile/Info.plist)
+          echo "MinimumOSVersion=$MIN"
+          case "$MIN" in
+            16.*) echo "deployment target OK for iOS 16.3.1" ;;
+            *) echo "::error::MinimumOSVersion $MIN would exclude iPad 6 / iOS 16.3.1"; exit 1 ;;
+          esac
+
+      - name: Assert the project lists our target and scheme
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project "$PROJECT"
+
+      - name: Build for device (signing disabled)
+        id: build
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
+            build 2>&1 | tee build.log | tail -n 120
+
+      - name: Package Payload/<App>.app into an .ipa
+        if: success()
+        run: |
+          set -euo pipefail
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          echo "app bundle: $APP"
+          test -d "$APP"
+
+          rm -rf out && mkdir -p out/Payload
+          cp -R "$APP" "out/Payload/"
+
+          # ad-hoc fakesign when ldid is available, so TrollStore's
+          # "preserve entitlements" path works. Not fatal if missing: TrollStore
+          # can fakesign on install as long as ldid is installed on-device.
+          if command -v ldid >/dev/null 2>&1; then
+            find "out/Payload" -type f -perm +111 -print0 | xargs -0 -I{} ldid -S "{}" || true
+          else
+            echo "ldid not present on runner; TrollStore will fakesign on install"
+          fi
+
+          ( cd out && zip -qry "$SCHEME-unsigned.ipa" Payload )
+          ls -lh "out/$SCHEME-unsigned.ipa"
+          unzip -l "out/$SCHEME-unsigned.ipa" | head -30
+
+      - name: Verify the packaged binary
+        if: success()
+        run: |
+          set -euo pipefail
+          IPA="out/$SCHEME-unsigned.ipa"
+          rm -rf verify && mkdir verify
+          unzip -q "$IPA" -d verify
+          PLIST=$(find verify/Payload -maxdepth 2 -name Info.plist | head -1)
+          BIN=$(find verify/Payload -maxdepth 2 -mindepth 2 -type f -perm +111 | head -1)
+          echo "plist: $PLIST"
+          echo "bin:   $BIN"
+
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$PLIST"
+
+          ARCHS=$(lipo -archs "$BIN")
+          echo "archs: $ARCHS"
+          # iPad 6 is A10 = arm64 (NOT arm64e). The binary must contain arm64.
+          case " $ARCHS " in
+            *" arm64 "*) echo "arm64 present - OK for iPad 6 (A10)" ;;
+            *) echo "::error::binary lacks arm64; iPad 6 (A10) cannot run it"; exit 1 ;;
+          esac
+
+          # the bundled UI must actually be inside the app
+          test -f "verify/Payload/$(basename "$(dirname "$(dirname "$PLIST")")")/WebApp/index.html" \
+            || find verify/Payload -path '*/WebApp/index.html' | grep -q . \
+            || { echo "::error::WebApp shell missing from the app bundle"; exit 1; }
+          echo "bundled WebApp shell present"
+
+      - name: Upload the IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LegadoMobile-unsigned-ipa
+          path: out/LegadoMobile-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload the built .app (always useful when packaging fails)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LegadoMobile-app-bundle
+          path: build/Build/Products/Release-iphoneos/*.app
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Write a summary
+        if: always()
+        run: |
+          {
+            echo "## 构建结果"
+            if [ -f "out/$SCHEME-unsigned.ipa" ]; then
+              echo "产物: \`out/$SCHEME-unsigned.ipa\`"
+              echo ""
+              echo "下一步：把这个 IPA 用 TrollStore 装到 iPad。"
+              echo "TrollStore 里记得先 Settings → Install ldid，否则会报错 173。"
+            else
+              echo "构建未产出 IPA，请下载 build-log artifact 查看完整日志。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

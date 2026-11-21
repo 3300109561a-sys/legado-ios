@@ -1,0 +1,1 @@
+{"name":"legado-ios-scripts","private":true,"version":"1.0.0","dependencies":{"node-addon-api":"^8.9.2","node-gyp-build":"^4.8.4","pyyaml":"^0.0.1","tree-sitter":"0.22.4","tree-sitter-swift":"0.7.1","web-tree-sitter":"^0.27.2","yaml":"^2.9.1"}}
