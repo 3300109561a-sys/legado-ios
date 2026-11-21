@@ -1,0 +1,44 @@
+name: runner-probe
+
+# 诊断用：找出哪些 runner 标签在这个账号下真的可用。
+# 之前 `macos-14` 被解析成 `macos-14-arm64-us-default` 后报
+# "configuration is not supported" —— 用一个矩阵一次性试出可用的标签。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            note: 基线：确认 Actions 本身能跑
+          - os: macos-13
+            note: Intel x64，容量最充足，最可能可用
+          - os: macos-14
+            note: 已知解析失败（arm64-us-default）
+          - os: macos-15
+            note: 较新
+          - os: macos-latest
+            note: 跟随默认
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    name: ${{ matrix.os }}
+    steps:
+      - name: 基本信息
+        run: |
+          echo "runner label : ${{ matrix.os }}"
+          echo "note         : ${{ matrix.note }}"
+          echo "os           : $(uname -s) $(uname -r) $(uname -m)"
+          echo "RUNNER_OS    : $RUNNER_OS"
+          echo "RUNNER_ARCH  : $RUNNER_ARCH"
+          echo "image        : $ImageOS $ImageVersion"
+
+      - name: Xcode（仅 macOS）
+        if: runner.os == 'macOS'
+        run: |
+          xcodebuild -version || echo "xcodebuild missing"
+          xcode-select -p || true
+          ls /Applications | grep -i xcode || true

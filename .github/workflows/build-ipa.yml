@@ -21,10 +21,21 @@ env:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macos-13 is Intel x64 and the most widely available image. macos-14 resolved
+    # to 'macos-14-arm64-us-default' on this account and GitHub rejected the job
+    # before assigning a runner ("configuration ... is not supported"), which
+    # shows up as an instant cancel with zero steps. If macos-13 is also
+    # unavailable, run the runner-probe workflow to find a working label.
+    runs-on: macos-13
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show runner identity
+        run: |
+          echo "RUNNER_OS=$RUNNER_OS  RUNNER_ARCH=$RUNNER_ARCH"
+          echo "image=$ImageOS $ImageVersion"
+          sw_vers
 
       - name: Toolchain
         run: |
@@ -178,3 +189,4 @@ jobs:
               echo "构建未产出 IPA，请下载 build-log artifact 查看完整日志。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
