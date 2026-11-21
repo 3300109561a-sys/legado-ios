@@ -1,4 +1,4 @@
-﻿name: build-unsigned-ipa
+name: build-unsigned-ipa
 
 # Builds an UNSIGNED .ipa on a macOS runner and attaches it to the run.
 #
@@ -62,9 +62,29 @@ jobs:
       - name: Validate Info.plist and asset catalog
         run: |
           set -euo pipefail
+          # Info.plist is a plist; the asset catalog files are plain JSON, so
+          # plutil -lint (which expects a plist) rejects them. Validate each
+          # with the parser that actually applies.
           plutil -lint ios/LegadoMobile/Info.plist
-          plutil -lint ios/LegadoMobile/Assets.xcassets/AppIcon.appiconset/Contents.json
-          plutil -lint ios/LegadoMobile/Assets.xcassets/LaunchBackground.colorset/Contents.json
+          python3 - <<'PY'
+          import json, pathlib, sys
+          targets = [
+              "ios/LegadoMobile/Assets.xcassets/Contents.json",
+              "ios/LegadoMobile/Assets.xcassets/AppIcon.appiconset/Contents.json",
+              "ios/LegadoMobile/Assets.xcassets/LaunchBackground.colorset/Contents.json",
+              "ios/LegadoMobile/WebApp/manifest.webmanifest",
+          ]
+          bad = 0
+          for t in targets:
+              p = pathlib.Path(t)
+              try:
+                  json.loads(p.read_text(encoding="utf-8"))
+                  print(f"OK   {t}")
+              except Exception as e:
+                  print(f"FAIL {t}: {e}")
+                  bad += 1
+          sys.exit(1 if bad else 0)
+          PY
           MIN=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' ios/LegadoMobile/Info.plist)
           echo "MinimumOSVersion=$MIN"
           case "$MIN" in
