@@ -99,30 +99,49 @@ if (DRY) {
 }
 
 // ---------------------------------------------------------------- api helper
-async function api(method, urlPath, body) {
+async function api(method, urlPath, body, tries = 6) {
   const url = urlPath.startsWith('http') ? urlPath : API + urlPath;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'legado-ios-publisher',
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* non-json */ }
-  if (!res.ok) {
-    const msg = json && json.message ? json.message : text.slice(0, 300);
-    const err = new Error(`${method} ${urlPath} -> ${res.status} ${msg}`);
-    err.status = res.status;
-    err.body = json;
-    throw err;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'legado-ios-publisher',
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch { /* non-json */ }
+      if (!res.ok) {
+        // 5xx and 429 are worth retrying; 4xx client errors are not
+        if ((res.status >= 500 || res.status === 429) && attempt < tries) {
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+          continue;
+        }
+        const msg = json && json.message ? json.message : text.slice(0, 300);
+        const err = new Error(`${method} ${urlPath} -> ${res.status} ${msg}`);
+        err.status = res.status;
+        err.body = json;
+        throw err;
+      }
+      return json;
+    } catch (e) {
+      // network-level failure: retry with backoff
+      lastErr = e;
+      if (e.status) throw e;
+      if (attempt === tries) break;
+      const wait = 1500 * attempt;
+      process.stdout.write(`\r网络重试 ${attempt}/${tries} (${e.message.slice(0, 40)})   `);
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
-  return json;
+  throw lastErr || new Error('request failed');
 }
 
 // ---------------------------------------------------------------- run

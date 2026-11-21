@@ -1,4 +1,4 @@
-name: build-unsigned-ipa
+﻿name: build-unsigned-ipa
 
 # Builds an UNSIGNED .ipa on a macOS runner and attaches it to the run.
 #
@@ -21,12 +21,15 @@ env:
 
 jobs:
   build:
-    # macos-13 is Intel x64 and the most widely available image. macos-14 resolved
-    # to 'macos-14-arm64-us-default' on this account and GitHub rejected the job
-    # before assigning a runner ("configuration ... is not supported"), which
-    # shows up as an instant cancel with zero steps. If macos-13 is also
-    # unavailable, run the runner-probe workflow to find a working label.
-    runs-on: macos-13
+    # Runner availability was measured with the runner-probe workflow on this
+    # account (2026-11-21):
+    #   ubuntu-latest  -> success
+    #   macos-15       -> success  (ARM64, Xcode 16.4)
+    #   macos-latest   -> success  (ARM64)
+    #   macos-14       -> cancelled, "macos-14-arm64-us-default is not supported"
+    #   macos-13       -> stuck queued, never assigned
+    # macos-15 is pinned deliberately: it is the oldest label proven to work here.
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -189,4 +192,5 @@ jobs:
               echo "构建未产出 IPA，请下载 build-log artifact 查看完整日志。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
 
