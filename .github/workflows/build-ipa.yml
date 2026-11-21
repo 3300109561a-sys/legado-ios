@@ -1,4 +1,4 @@
-name: build-unsigned-ipa
+﻿name: build-unsigned-ipa
 
 # Builds an UNSIGNED .ipa on a macOS runner and attaches it to the run.
 #
@@ -92,22 +92,27 @@ jobs:
             *) echo "::error::MinimumOSVersion $MIN would exclude iPad 6 / iOS 16.3.1"; exit 1 ;;
           esac
 
-      - name: Assert the project lists our target and scheme
+      - name: Assert the project lists our target
         run: |
           set -euo pipefail
-          xcodebuild -list -project "$PROJECT"
+          xcodebuild -list -project "$PROJECT" | tee list.txt
+          grep -q "LegadoMobile" list.txt
+          echo "target present"
 
       - name: Build for device (signing disabled)
         id: build
         run: |
           set -o pipefail
+          # Build the target directly instead of going through the scheme: a
+          # hand-written .xcscheme is only honoured by Xcode after it rewrites
+          # xcschememanagement.plist, and xcodebuild otherwise reports
+          # "Scheme LegadoMobile is not currently configured for the build action".
           xcodebuild \
             -project "$PROJECT" \
-            -scheme "$SCHEME" \
+            -target "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
-            -destination 'generic/platform=iOS' \
+            -SYMROOT="$PWD/build" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -122,7 +127,7 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          APP=$(find build -maxdepth 3 -name '*.app' -path '*Release-iphoneos*' | head -1)
           echo "app bundle: $APP"
           test -d "$APP"
 
@@ -185,7 +190,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LegadoMobile-app-bundle
-          path: build/Build/Products/Release-iphoneos/*.app
+          path: |
+            build/**/*.app
+            build/**/*.xcarchive
           if-no-files-found: ignore
           retention-days: 14
 
@@ -212,5 +219,7 @@ jobs:
               echo "构建未产出 IPA，请下载 build-log artifact 查看完整日志。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+
 
 
