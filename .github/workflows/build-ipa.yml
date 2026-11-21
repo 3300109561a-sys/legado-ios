@@ -112,7 +112,7 @@ jobs:
             -target "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
-            -SYMROOT="$PWD/build" \
+            -SYMROOT="$(pwd)/build" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -127,9 +127,14 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          APP=$(find build -maxdepth 3 -name '*.app' -path '*Release-iphoneos*' | head -1)
-          echo "app bundle: $APP"
-          test -d "$APP"
+          APP=$(find . -maxdepth 5 -name '*.app' -path '*Release-iphoneos*' -not -path '*/Payload/*' | head -1)
+          echo "app bundle: ${APP:-<none>}"
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "::error::no .app produced; dumping build tree"
+            find . -name '*.app' -maxdepth 6 2>/dev/null | head -20
+            ls -la build ios/build 2>/dev/null | head -40
+            exit 1
+          fi
 
           rm -rf out && mkdir -p out/Payload
           cp -R "$APP" "out/Payload/"
@@ -192,7 +197,7 @@ jobs:
           name: LegadoMobile-app-bundle
           path: |
             build/**/*.app
-            build/**/*.xcarchive
+            ios/build/**/*.app
           if-no-files-found: ignore
           retention-days: 14
 
@@ -219,6 +224,8 @@ jobs:
               echo "构建未产出 IPA，请下载 build-log artifact 查看完整日志。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+
 
 
 
